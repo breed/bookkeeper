@@ -81,7 +81,10 @@ public class EntryLogger {
     static final String AVAILABLE_NODE = "available";
 
     // Maps entry log files to the set of ledgers that comprise the file.
-    private ConcurrentMap<Long, ConcurrentHashMap<Long, Boolean>> entryLogs2LedgersMap = new ConcurrentHashMap<Long, ConcurrentHashMap<Long, Boolean>>();
+    private ConcurrentMap<Long, ConcurrentMap<Long, Boolean>> entryLogs2LedgersMap = new ConcurrentHashMap<Long, ConcurrentMap<Long, Boolean>>();
+    
+    private ConcurrentMap<Long, Boolean> currentLedgersMap;
+    
     // This is the thread that garbage collects the entry logs that do not
     // contain any active ledgers in them.
     GarbageCollectorThread gcThread = new GarbageCollectorThread();
@@ -110,6 +113,10 @@ public class EntryLogger {
             }
         }
         createLogId(logId);
+        // Extract all of the ledger ID's that comprise all of the entry logs
+        // (except for the current new one which is still being written to).
+        extractLedgersFromEntryLogs();
+
         // Start the Garbage Collector thread to prune unneeded entry logs.
         gcThread.start();
     }
@@ -207,7 +214,7 @@ public class EntryLogger {
                         }
                         // Loop through all of the entry logs and remove the non-active ledgers.
                         for (Long entryLogId : entryLogs2LedgersMap.keySet()) {
-                            ConcurrentHashMap<Long, Boolean> entryLogLedgers = entryLogs2LedgersMap.get(entryLogId);
+                            ConcurrentMap<Long, Boolean> entryLogLedgers = entryLogs2LedgersMap.get(entryLogId);
                             for (Long entryLogLedger : entryLogLedgers.keySet()) {
                                 // Remove the entry log ledger from the set if it isn't active.
                                 if (!bookie.ledgerCache.activeLedgers.containsKey(entryLogLedger)) {
@@ -253,9 +260,10 @@ public class EntryLogger {
         for(File f: dirs) {
             setLastLogId(f, logId);
         }
-        // Extract all of the ledger ID's that comprise all of the entry logs
-        // (except for the current new one which is still being written to).
-        extractLedgersFromEntryLogs();
+        currentLedgersMap = new ConcurrentHashMap<Long, Boolean>();
+        if (entryLogs2LedgersMap.put((Long)logId, currentLedgersMap) != null) {
+            LOG.error("There seems to be a preexisting log: " + logId);
+        }
     }
 
     /**
@@ -323,6 +331,7 @@ public class EntryLogger {
         logChannel.write(entry);
         //logChannel.flush(false);
         somethingWritten = true;
+        currentLedgersMap.put(ledger, Boolean.TRUE);
         return (logId << 32L) | pos;
     }
     
